@@ -5,6 +5,7 @@
 //   shots     settings + Backrest tab, dark and light, 1920 and 375; reports errors, scroll, top bar text; saves PNGs
 //   exercise  add / edit / reorder / disable / delete a throwaway tab ("ZzTest") and confirm its .page appears and
 //             disappears over SSH and that the top bar follows
+//   setup     creates the Backrest tab (http://[HOST]:9898/, in a tab, enabled) through the settings UI
 //   pages     loads stock pages (Main, Docker, Dashboard, SecretsMan, NetMan) and reports errors
 // Env: UNRAID_HOST (default 192.168.0.10), UNRAID_SSH_KEY (default /root/.ssh/unraid_secretsman).
 // Auth: reuses the newest active root PHP session on the host as cookie unraid_<md5(host)>. The id is never printed.
@@ -100,6 +101,11 @@ async function exercise(browser) {
   const f = () => page.frameLocator('#atb-set-frame');
   console.log('     start pages: ' + pageFiles());
   await gotoSettings(page);
+  if (await f().getByRole('button', { name: 'Delete ZzTest' }).count()) { // a leftover from an interrupted run
+    await f().getByRole('button', { name: 'Delete ZzTest' }).click();
+    await f().getByRole('button', { name: 'Delete', exact: true }).click();
+    await f().getByText('Deleted ZzTest.').waitFor();
+  }
 
   await f().getByRole('button', { name: 'Add tab' }).click();
   await f().locator('#atb-f-label').fill('ZzTest');
@@ -135,13 +141,13 @@ async function exercise(browser) {
   await f().getByRole('button', { name: 'Move ZzTest down' }).click();
   await f().getByText('Moved ZzTest down.').waitFor();
 
-  await f().locator('.atb-row', { hasText: 'ZzTest' }).locator('input[type=checkbox]').uncheck();
+  await f().locator('.atb-row', { hasText: 'ZzTest' }).locator('input[type=checkbox]').click(); // controlled input: it flips only after the server confirms, so click and wait for the toast
   await f().getByText('Disabled ZzTest.').waitFor();
   expect(!/AppTab-ZzTest/.test(pageFiles()), 'disable: page removed');
   await page.goto(`http://${HOST}:81/Main`, { waitUntil: 'load' });
   expect(!(await topBar(page)).includes('ZZTEST'), 'disable: top bar no longer has ZzTest');
   await gotoSettings(page);
-  await f().locator('.atb-row', { hasText: 'ZzTest' }).locator('input[type=checkbox]').check();
+  await f().locator('.atb-row', { hasText: 'ZzTest' }).locator('input[type=checkbox]').click();
   await f().getByText('Enabled ZzTest.').waitFor();
   expect(/AppTab-ZzTest/.test(pageFiles()), 'enable: page is back');
 
@@ -151,6 +157,22 @@ async function exercise(browser) {
   expect(!/AppTab-ZzTest/.test(pageFiles()), 'delete: page removed');
   expect(!ssh('cat /boot/config/plugins/app.tabs/tabs.json').includes('ZzTest'), 'delete: gone from tabs.json');
   console.log('     end pages: ' + pageFiles());
+  expect(errors.length === 0, 'errors: ' + (errors.join(' | ') || 'none'));
+  await ctx.close();
+}
+
+async function setup(browser) {
+  const ctx = await newCtx(browser, 1920, 1012);
+  const errors = [];
+  const page = await ctx.newPage(); watch(page, errors);
+  const f = () => page.frameLocator('#atb-set-frame');
+  await gotoSettings(page);
+  await f().getByRole('button', { name: 'Add tab' }).click();
+  await f().locator('#atb-f-label').fill('Backrest');
+  await f().locator('#atb-f-url').fill('http://[HOST]:9898/');
+  await f().getByRole('button', { name: 'Save', exact: true }).click();
+  await f().getByText('Added Backrest.').waitFor();
+  expect(ssh('cat /boot/config/plugins/app.tabs/tabs.json').includes('http://[HOST]:9898/'), 'tabs.json on flash has Backrest');
   expect(errors.length === 0, 'errors: ' + (errors.join(' | ') || 'none'));
   await ctx.close();
 }
@@ -170,9 +192,9 @@ async function pages(browser) {
 }
 
 (async () => {
-  if (!['shots', 'exercise', 'pages'].includes(mode)) { console.error('usage: live-check.js shots|exercise|pages [outDir]'); process.exit(2); }
+  if (!['shots', 'exercise', 'setup', 'pages'].includes(mode)) { console.error('usage: live-check.js shots|exercise|setup|pages [outDir]'); process.exit(2); }
   const browser = await chromium.launch({ executablePath: headlessShell() });
-  try { await { shots, exercise, pages }[mode](browser); } finally { await browser.close(); }
+  try { await { shots, exercise, setup, pages }[mode](browser); } finally { await browser.close(); }
   console.log(bad ? `${bad} FAILED` : 'all ok');
   process.exit(bad ? 1 : 0);
 })().catch((e) => { console.error(e.message); process.exit(1); });
