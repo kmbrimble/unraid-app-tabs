@@ -1,0 +1,91 @@
+#!/bin/bash
+# Assembles the installable plugin tree and packages it as a .txz + .md5,
+# for attaching to a GitHub Release (see CLAUDE.md "Shipping model").
+#
+# Run by Gitea CI (release-readiness) and by .github/workflows/release.yml on a mirrored v* tag, and available locally for a test build
+# (needs GNU tar and xz); a local build gives the same md5 as CI. It only produces files; it neither
+# tags nor publishes anything — see CLAUDE.md "Deploy and verify".
+#
+# Usage: scripts/build-plugin.sh [version]
+#   version defaults to today's date (YYYY.MM.DD); the .plg's &version;
+#   entity must be updated to match separately.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION="${1:-$(date +%Y.%m.%d)}"
+NAME="app.tabs"
+# Slackware's upgradepkg/installpkg extracts a package relative to /, not
+# relative to any "plugins" convention — the full absolute destination path
+# has to be baked into the archive itself (see unraid-secretsman's
+# scripts/build-plugin.sh header for the incident this convention avoids).
+INSTALL_ROOT="usr/local/emhttp/plugins/$NAME"
+BUILD_DIR="$(mktemp -d)"
+PKG_DIR="$BUILD_DIR/$INSTALL_ROOT"
+OUT_DIR="$REPO_ROOT/dist"
+
+trap 'rm -rf "$BUILD_DIR"' EXIT
+
+# Refuse to package anything if the .plg would not install, even when CI is bypassed.
+php "$REPO_ROOT/scripts/check-plg.php" "$REPO_ROOT/$NAME.plg" || { echo "build aborted: broken .plg"; exit 1; }
+
+echo "Building $NAME-$VERSION.txz ..."
+
+mkdir -p "$PKG_DIR/include" "$PKG_DIR/app"
+
+cp "$REPO_ROOT"/plugin/include/*.php "$PKG_DIR/include/"
+
+# The web app (ui/, Preact + Vite + TypeScript): app/index.php is the PHP shell, app/assets/ the built JS and CSS. The
+# build is reproducible (fixed output names, no sourcemaps, lockfile-pinned, Node pinned in CI) so the archive md5
+# matches across runners. APPTABS_UI_DIST points at a prebuilt dist (tests/run.php builds the UI once and reuses it);
+# unset, this runs `npm ci && npm run build`.
+UI_DIST="${APPTABS_UI_DIST:-}"
+if [ -z "$UI_DIST" ]; then
+  echo "  building ui/ ($(node --version), npm $(npm --version))" >&2
+  ( cd "$REPO_ROOT/ui" && npm ci --no-audit --no-fund --loglevel=error && npm run build ) >&2
+  UI_DIST="$REPO_ROOT/ui/dist"
+fi
+if [ ! -f "$UI_DIST/assets/app.js" ] || [ ! -f "$UI_DIST/assets/app.css" ]; then
+  echo "build-plugin.sh: $UI_DIST/assets/app.js or app.css is missing: the UI did not build" >&2
+  exit 1
+fi
+cp "$REPO_ROOT"/plugin/app/index.php "$PKG_DIR/app/"
+cp -r "$UI_DIST/assets" "$PKG_DIR/app/assets"
+
+# .page files must sit in the plugin's installed ROOT — Unraid's page loader
+# globs plugins/*/*.page non-recursively.
+cp "$REPO_ROOT"/plugin/*.page "$PKG_DIR/"
+cp "$REPO_ROOT"/plugin/app-tabs-core.js "$PKG_DIR/"
+
+# The Installed Plugins page renders README.md from the plugin's installed root
+# (dynamix.plugin.manager/include/ShowPlugins.php: Markdown(plugins/{name}/README.md),
+# falling back to a bare bold plugin name if absent). That is a one-line description
+# slot in a shared table, NOT documentation: ship plugin/README.md, which follows the
+# stock convention of a bold name plus one paragraph and no headings. Packaging the
+# repo's own README.md put its `# App Tabs` H1 straight into that table, rendering
+# the row several times the size of every stock plugin beside it — see issue #1.
+cp "$REPO_ROOT"/plugin/README.md "$PKG_DIR/"
+
+mkdir -p "$OUT_DIR"
+TXZ_PATH="$OUT_DIR/$NAME-$VERSION.txz"
+# Deterministic archive: the same source must give the same bytes on any machine, because the .plg's &md5; is
+# committed before the tag and the GitHub release workflow rebuilds and requires it to match (scripts/check-md5.sh).
+# - sorted names, fixed mtime, numeric root owner;
+# - --mode: cp/mkdir/git checkout all inherit the caller's umask, so normalise to 0644 files / 0755 dirs;
+# - xz -T1 on the command line: xz >= 5.6 defaults to multi-threaded, which writes sizes into the block header and
+#   changes the bytes (identical tar stream, different .txz). Command-line flags beat XZ_OPT/XZ_DEFAULTS.
+# tests/run.php builds under different umask/TZ/XZ_DEFAULTS and requires identical md5s.
+echo "  $(tar --version | head -1); $(xz --version | head -1)" >&2  # stderr: check-md5.sh discards stdout
+( cd "$BUILD_DIR" && tar --sort=name --mtime='UTC 2020-01-01' --owner=0 --group=0 --numeric-owner \
+    --mode='u=rwX,go=rX' -I 'xz -6 -T1' -cf "$TXZ_PATH" usr )
+
+MD5=$(md5sum "$TXZ_PATH" | awk '{print $1}')
+echo "$MD5" > "$OUT_DIR/$NAME.md5"
+
+echo "Built: $TXZ_PATH"
+echo "  md5: $MD5"
+echo
+echo "This is a local build. A release is: bump &version; in app.tabs.plg, write its ###<version>"
+echo "  CHANGES entry, set &md5; to the md5 above (CI tells you the value), merge the PR on Gitea, then tag"
+echo "  v<version> on Gitea. The tag is mirrored to GitHub and .github/workflows/release.yml publishes it."
+echo "  Then run scripts/install-on-host.sh to put it on the Unraid host. See CLAUDE.md \"Deploy and verify\"."

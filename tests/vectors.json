@@ -1,0 +1,123 @@
+{
+  "labels_ok": [
+    "Backrest",
+    "ZzTest",
+    "My App",
+    "App-2",
+    "a",
+    "Plex 4K",
+    "v1.2",
+    "Home_Assistant",
+    "C++ Tools",
+    "Grafana Loki",
+    "constructor",
+    "valueOf",
+    "toString"
+  ],
+  "labels_bad": [
+    "",
+    " Backrest",
+    "Backrest ",
+    "-Backrest",
+    "Backrest-",
+    "Back\"rest",
+    "Back<b>rest",
+    "A&B",
+    "a$b",
+    "{$x}",
+    "<?php x ?>",
+    "a\nb",
+    "../x",
+    "a/b",
+    "a\\b",
+    "Back'rest",
+    "x`y",
+    "This label is far too long to fit",
+    "tab\there",
+    "ünï",
+    "a;b",
+    "a%b"
+  ],
+  "slugs": {
+    "Backrest": "Backrest",
+    "My App": "My-App",
+    "Plex 4K": "Plex-4K",
+    "v1.2": "v1-2",
+    "C++ Tools": "C-Tools",
+    "Home_Assistant": "Home-Assistant",
+    "a  b": "a-b"
+  },
+  "urls_ok": [
+    "http://[HOST]:9898/",
+    "https://[HOST]/",
+    "http://192.168.0.10:9898/",
+    "https://example.com/path?q=1&r=2#frag",
+    "http://[HOST]:81/Dashboard",
+    "http://host.local",
+    "http://[::1]:8080/x",
+    "http://[HOST]:9898/a@b",
+    "http://nas?x=1",
+    "http://my_container:8080/",
+    "http://[fd00::1]:9898/",
+    "http://[::ffff:192.168.0.1]/"
+  ],
+  "urls_bad": [
+    "",
+    "ftp://x/",
+    "javascript:alert(1)",
+    "data:text/html,x",
+    "//[HOST]/",
+    "http://",
+    "http:///x",
+    "[HOST]:9898",
+    "http://user:pw@[HOST]/",
+    "http://user@host/",
+    "http://[HOST]x/",
+    "http://x[HOST]/",
+    "http://[host]:9898/",
+    "http://[HOST]:0/",
+    "http://[HOST]:65536/",
+    "http://[HOST]:99999/",
+    "http://host/\"onload=x",
+    "http://host/<script>",
+    "http://host/a b",
+    "http://host/a\nb",
+    "http://host/'x",
+    "http://host/`x",
+    "http://host/a\\b",
+    "http://host:abc/",
+    "https://[HOST]/{x}",
+    "http://ho st/",
+    "http://[HOST]/[HOST]",
+    "HTTP://host/",
+    "http://h/a b",
+    "http://h/a b",
+    "http://h/a　b",
+    "http://[::::]/",
+    "http://[:::1]/",
+    "http://[abcd]/",
+    "http://h/﻿x"
+  ],
+  "resolve": [
+    [
+      "http://[HOST]:9898/",
+      "nas.local",
+      "http://nas.local:9898/"
+    ],
+    [
+      "http://[HOST]:9898/",
+      "192.168.0.10",
+      "http://192.168.0.10:9898/"
+    ],
+    [
+      "http://[HOST]:9898/",
+      "[fd00::1]",
+      "http://[fd00::1]:9898/"
+    ],
+    [
+      "https://example.com/",
+      "nas",
+      "https://example.com/"
+    ]
+  ]
+}

@@ -1,0 +1,82 @@
+<?xml version="1.0" standalone="yes"?>
+
+<!--
+App Tabs: turn a list of web apps into Unraid top-bar tabs, each embedding the app in an iframe.
+https://github.com/kmbrimble/unraid-app-tabs
+
+Not distributed via Community Applications. Install by URL from
+Plugins -> Install Plugin, using this file's raw.githubusercontent.com URL.
+See README.md and CLAUDE.md for design and the release process.
+-->
+
+<!DOCTYPE PLUGIN [
+<!ENTITY name      "app.tabs">
+<!ENTITY author    "kmbrimble">
+<!ENTITY version   "0.1.0">
+<!ENTITY launch    "Settings/AppTabs">
+<!ENTITY pluginURL "https://raw.githubusercontent.com/kmbrimble/unraid-app-tabs/main/app.tabs.plg">
+<!ENTITY gitURL    "https://github.com/kmbrimble/unraid-app-tabs/releases/download/v&version;">
+<!ENTITY plgPATH   "/boot/config/plugins/&name;">
+<!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
+<!ENTITY md5       "370fdee0886cadd0765200b3b8c7a6d8">
+]>
+
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://github.com/kmbrimble/unraid-app-tabs" min="7.0" icon="window-restore">
+
+<CHANGES>
+###0.1.0
+- First release. App Tabs turns a list of web apps into top-bar tabs, placed after NetMan, each embedding the app
+  in an iframe (or opening it in a new browser tab). Manage the list under Settings, Utilities, App Tabs: add,
+  edit, delete (with confirmation), reorder with up/down buttons, enable/disable. A URL may use [HOST] for the
+  hostname you opened Unraid with, so http://[HOST]:9898/ follows whatever address you use. Only http and https
+  are accepted; an https GUI with an http app gets a clear message instead of a blank box (mixed content).
+- Config lives on flash in tabs.json (written atomically, validated on load; a bad file is reported on the
+  settings page and generates no tabs). The tab pages are generated from it on save, on install and at every boot.
+  Labels and URLs are treated as untrusted: a URL is never written into a generated page, and labels are held to
+  a strict character set.
+- Known limits: an app that forbids embedding (X-Frame-Options or CSP frame-ancestors) cannot be detected from a page,
+  so its tab stays blank; use Open full page. An http app under an https GUI is blocked by the browser (a message is shown).
+</CHANGES>
+
+<FILE Name="&plgPATH;/&name;-&version;.txz">
+<URL>&gitURL;/&name;-&version;.txz</URL>
+<MD5>&md5;</MD5>
+</FILE>
+
+<FILE Run="/bin/bash">
+<INLINE>
+set -e
+
+# No separate md5 re-check here: the .txz FILE block's own MD5 above is already verified by the plugin manager
+# before this script runs. A second check against a sidecar goes stale across upgrades and breaks the install.
+
+upgradepkg --install-new &plgPATH;/&name;-&version;.txz
+
+# Keep only the package just installed; superseded ones would otherwise pile up on flash.
+find &plgPATH; -maxdepth 1 -name '&name;-*.txz' ! -name '&name;-&version;.txz' -delete
+
+mkdir -p &plgPATH;
+
+# The top-bar tab pages are generated files (not part of the package): rebuild them from the flash config on every
+# install, upgrade and boot (this block is the boot hook, because /usr/local/emhttp is restored from the OS image).
+# A config that does not load is reported and generates no tabs; it must never fail the install.
+if [[ -f &emhttp;/include/generate.php ]]; then
+  php &emhttp;/include/generate.php || echo "app.tabs: tabs.json needs attention (see above); no tabs were generated."
+fi
+
+echo "app.tabs: install complete"
+</INLINE>
+</FILE>
+
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+# The installed tree (including the generated tab pages) is removed. The config in &plgPATH; (tabs.json and its
+# .bak) is deliberately KEPT so a reinstall brings the tabs back; delete that directory by hand to wipe it.
+removepkg &name;-&version;
+rm -rf &emhttp;
+
+echo "app.tabs: removed. &plgPATH;/tabs.json was left in place."
+</INLINE>
+</FILE>
+
+</PLUGIN>
