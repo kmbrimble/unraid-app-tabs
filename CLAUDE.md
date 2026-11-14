@@ -6,8 +6,7 @@ mirror. **Delivery is from Gitea (since 0.1.1, 14 Nov 2026; Kieren's decision: G
 add-ons only):** `pluginURL` is `https://git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg`, the `.txz`/`.md5` come from
 the Gitea release, a `v*` tag runs `.gitea/workflows/release.yml` (shared `scripts/gitea-release.sh`, canonical copy in unraid-flightplan;
 job token or Actions secret `RELEASE_TOKEN`), and the owner is public on Gitea (LAN-only), so no token is needed. Plugin updates therefore
-depend on the homelab being up and on the host's `git.kiztigs.com` hosts entry. The mirrored `.github/workflows/release.yml` still publishes
-the same bytes to a GitHub release nothing depends on. It was built by copying their
+depend on the homelab being up and on the host's `git.kiztigs.com` hosts entry. The GitHub copy has no release workflow any more (removed in the 15 Nov 2026 GitHub exit); Gitea is the only publisher. It was built by copying their
 scaffolding; their CLAUDE.md files hold the history of the traps this repo already avoids.
 
 ## What it is
