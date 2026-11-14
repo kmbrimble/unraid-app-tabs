@@ -363,7 +363,7 @@ checkEquals('plg: parses with entities expanded, has version, pluginURL and md5'
 $plgText = (string) file_get_contents($plg);
 check('plg: no bare && in an INLINE block', !preg_match('~&&~', $plgText));
 check('plg: <INLINE> is upper case', !str_contains($plgText, '<Inline>') && !str_contains($plgText, '<inline>'));
-check('plg: pluginURL points at the GitHub raw .plg', str_contains($plgText, 'raw.githubusercontent.com/kmbrimble/unraid-app-tabs/main/app.tabs.plg'));
+check('plg: pluginURL points at the Gitea raw .plg', str_contains($plgText, 'git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg'));
 check('plg: remove block does not delete the flash config dir', !preg_match('~rm\s+-rf\s+&plgPATH;~', $plgText));
 
 // ---- INLINE blocks, run for real under bash against recording stubs ------------------------------------------------------

@@ -13,7 +13,7 @@ Main and Docker.
 Plugins, Install Plugin, paste:
 
 ```
-https://raw.githubusercontent.com/kmbrimble/unraid-app-tabs/main/app.tabs.plg
+https://git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg
 ```
 
 Not distributed through Community Applications. Requires Unraid 7.0 or later.
@@ -68,6 +68,6 @@ directory and `AppTab-*.page` in the plugin directory.
 
 See `CLAUDE.md`. In short: `php tests/run.php` (PHP suite, includes the package build and reproducibility checks),
 `node tests/js.test.js` and `node tests/globals.test.js`, and in `ui/`: `npm test`, `npm run check:contrast`,
-`npm run build`. Releases are cut on the primary forge and published to GitHub by a workflow; see CLAUDE.md.
+`npm run build`. Releases are cut on the primary forge and published as a Gitea release by a workflow; see CLAUDE.md.
 
 MIT licensed.

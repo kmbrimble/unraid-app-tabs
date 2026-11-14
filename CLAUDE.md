@@ -2,7 +2,12 @@
 
 Concise design record. Plugin id `app.tabs`, repo `kmbrimble/unraid-app-tabs`. Gitea is primary
 (`https://git.kiztigs.com/kmbrimble/unraid-app-tabs`), GitHub (`kmbrimble/unraid-app-tabs`, public) is a read-only push
-mirror and the release surface, exactly like unraid-secretsman and unraid-docker-netman. It was built by copying their
+mirror. **Delivery is from Gitea (since 0.1.1, 14 Nov 2026; Kieren's decision: Gitea delivers all his Unraid plugins, GitHub is for HACS
+add-ons only):** `pluginURL` is `https://git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg`, the `.txz`/`.md5` come from
+the Gitea release, a `v*` tag runs `.gitea/workflows/release.yml` (shared `scripts/gitea-release.sh`, canonical copy in unraid-flightplan;
+job token or Actions secret `RELEASE_TOKEN`), and the owner is public on Gitea (LAN-only), so no token is needed. Plugin updates therefore
+depend on the homelab being up and on the host's `git.kiztigs.com` hosts entry. The mirrored `.github/workflows/release.yml` still publishes
+the same bytes to a GitHub release nothing depends on. It was built by copying their
 scaffolding; their CLAUDE.md files hold the history of the traps this repo already avoids.
 
 ## What it is
@@ -71,7 +76,7 @@ reusing an active root session; never prints it).
 
 ## Deploy and verify
 
-Release flow is the `forge-release` skill: version-bump PR (with `&md5;` from CI), merge, tag `v<version>` on Gitea, mirror delivers
-it, `.github/workflows/release.yml` publishes. Then `FORGE_GUARD=off scripts/install-on-host.sh` from the claude-code container
+Release flow is the `forge-release` skill: version-bump PR (with `&md5;` from CI), merge, tag `v<version>` on Gitea,
+the tag runs `.gitea/workflows/release.yml` and publishes the Gitea release. Then `scripts/install-on-host.sh` from the claude-code container
 (it waits for the raw `.plg` to converge and verifies the host), and three-way md5: release asset == `.plg &md5;` == the package
 file on the host's flash.

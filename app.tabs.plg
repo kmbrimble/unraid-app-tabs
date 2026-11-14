@@ -2,28 +2,34 @@
 
 <!--
 App Tabs: turn a list of web apps into Unraid top-bar tabs, each embedding the app in an iframe.
-https://github.com/kmbrimble/unraid-app-tabs
+https://git.kiztigs.com/kmbrimble/unraid-app-tabs
 
 Not distributed via Community Applications. Install by URL from
-Plugins -> Install Plugin, using this file's raw.githubusercontent.com URL.
+Plugins -> Install Plugin, using this file's raw git.kiztigs.com URL.
 See README.md and CLAUDE.md for design and the release process.
 -->
 
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "app.tabs">
 <!ENTITY author    "kmbrimble">
-<!ENTITY version   "0.1.0">
+<!ENTITY version   "0.1.1">
 <!ENTITY launch    "Settings/AppTabs">
-<!ENTITY pluginURL "https://raw.githubusercontent.com/kmbrimble/unraid-app-tabs/main/app.tabs.plg">
-<!ENTITY gitURL    "https://github.com/kmbrimble/unraid-app-tabs/releases/download/v&version;">
+<!ENTITY pluginURL "https://git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg">
+<!ENTITY gitURL    "https://git.kiztigs.com/kmbrimble/unraid-app-tabs/releases/download/v&version;">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
 <!ENTITY md5       "370fdee0886cadd0765200b3b8c7a6d8">
 ]>
 
-<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://github.com/kmbrimble/unraid-app-tabs" min="7.0" icon="window-restore">
+<PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://git.kiztigs.com/kmbrimble/unraid-app-tabs" min="7.0" icon="window-restore">
 
 <CHANGES>
+###0.1.1
+- Delivery moved to Gitea (git.kiztigs.com): the plugin file and its release
+  packages now come from the Gitea repository instead of GitHub, so the server
+  needs to reach git.kiztigs.com to check for and fetch App Tabs updates. No
+  change to what App Tabs does.
+
 ###0.1.0
 - First release. App Tabs turns a list of web apps into top-bar tabs, placed after NetMan, each embedding the app
   in an iframe (or opening it in a new browser tab). Manage the list under Settings, Utilities, App Tabs: add,
