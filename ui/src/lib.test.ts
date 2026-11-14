@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from 'vitest'
-import { ApiError, applyTheme, mixedWarning, moveTab, parseThemePref, postJson, postRaw, readThemePref, saveThemePref, savePayload, tabPath, validateTab, type Tab } from './lib'
+import { ApiError, applyTheme, blankTab, consoleSummary, fromServer, mixedWarning, moveTab, parseThemePref, postJson, postRaw, readThemePref, saveThemePref, savePayload, tabPath, validateTab, type Tab } from './lib'
 import { installCore, realCore } from './testcore'
 
-const tab = (o: Partial<Tab> = {}): Tab => ({ label: 'Backrest', url: 'http://[HOST]:9898/', open: 'iframe', enabled: true, ...o })
+const tab = (o: Partial<Tab> = {}): Tab => ({ label: 'Backrest', kind: 'url', url: 'http://[HOST]:9898/', open: 'iframe', container: '', session: '', shell: 'sh', enabled: true, ...o })
 beforeAll(installCore)
 
 describe('moveTab', () => {
@@ -21,7 +21,7 @@ describe('moveTab', () => {
 describe('savePayload', () => {
   it('trims and keeps order and only the four keys', () => {
     const j = JSON.parse(savePayload([{ ...tab({ label: ' Z ', url: ' http://x/ ' }), extra: 1 } as Tab, tab()]))
-    expect(j[0]).toEqual({ label: 'Z', url: 'http://x/', open: 'iframe', enabled: true })
+    expect(j[0]).toEqual({ label: 'Z', kind: 'url', url: 'http://x/', open: 'iframe', enabled: true })
     expect(j[1].label).toBe('Backrest')
   })
 })
@@ -82,5 +82,32 @@ describe('theme', () => {
     expect(el.getAttribute('data-theme')).toBe('dark')
     applyTheme('light', el)
     expect(el.getAttribute('data-theme')).toBe('light')
+  })
+})
+
+describe('console tabs (lib)', () => {
+  const ct = (o: Partial<Tab> = {}): Tab => tab({ label: 'Claude', kind: 'console', url: '', container: 'claude-code', session: 'claude', ...o })
+  it('savePayload sends a console tab\'s own keys only, trimmed', () => {
+    const j = JSON.parse(savePayload([ct({ container: ' claude-code ', session: ' claude ', url: 'http://leftover/' })]))
+    expect(j[0]).toEqual({ label: 'Claude', kind: 'console', container: 'claude-code', session: 'claude', shell: 'sh', enabled: true })
+  })
+  it('fromServer: a 0.1.x tab (no kind) is a URL tab; console defaults are filled', () => {
+    expect(fromServer({ label: 'A', url: 'http://x/', open: 'newtab', enabled: true })).toMatchObject({ kind: 'url', url: 'http://x/', open: 'newtab', container: '', session: '', shell: 'sh' })
+    expect(fromServer({ label: 'A', kind: 'console', container: 'c', enabled: true })).toMatchObject({ kind: 'console', container: 'c', session: '', shell: 'sh', url: '' })
+    expect(fromServer({ label: 'A', kind: 'weird' as never, enabled: true }).kind).toBe('url')
+  })
+  it('blankTab', () => expect(blankTab('console')).toMatchObject({ kind: 'console', container: '', session: '', shell: 'sh', enabled: true }))
+  it('validateTab: console fields use the shared rules, URL is not checked', () => {
+    expect(validateTab(ct(), [])).toEqual({})
+    expect(validateTab(ct({ session: '' }), [])).toEqual({})
+    expect(Object.keys(validateTab(ct({ container: 'a;b', session: '$(x)' }), [])).sort()).toEqual(['container', 'session'])
+    expect(validateTab(ct({ container: '' }), []).container).toBeTruthy()
+    expect(validateTab(ct({ url: 'not a url' }), [])).toEqual({})
+    expect(validateTab(tab({ container: 'a;b' }), [])).toEqual({})
+  })
+  it('validateTab: a console label collides with a URL label', () => expect(validateTab(ct({ label: 'backrest' }), [tab()]).label).toContain('already uses'))
+  it('consoleSummary', () => {
+    expect(consoleSummary(ct())).toBe('docker exec -it claude-code tmux attach -t claude')
+    expect(consoleSummary(ct({ session: '', shell: 'bash' }))).toBe('docker exec -it claude-code bash')
   })
 })

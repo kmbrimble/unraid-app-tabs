@@ -6,7 +6,7 @@ import type { Tab } from './lib'
 import { installCore } from './testcore'
 
 type Req = Record<string, string>
-const tab = (o: Partial<Tab> = {}): Tab => ({ label: 'Backrest', url: 'http://[HOST]:9898/', open: 'iframe', enabled: true, ...o })
+const tab = (o: Partial<Tab> = {}): Tab => ({ label: 'Backrest', kind: 'url', url: 'http://[HOST]:9898/', open: 'iframe', container: '', session: '', shell: 'sh', enabled: true, ...o })
 let stored: Tab[]
 let configError: string | null
 let calls: Req[]
@@ -177,7 +177,7 @@ describe('add and edit', () => {
     await type(root.querySelector('#atb-f-url') as HTMLInputElement, 'http://[HOST]:81/Dashboard')
     await submitForm(); await flush()
     expect(saves()[0].map((t) => t.label)).toEqual(['Backrest', 'ZzTest'])
-    expect(saves()[0][1]).toEqual({ label: 'ZzTest', url: 'http://[HOST]:81/Dashboard', open: 'iframe', enabled: true })
+    expect(saves()[0][1]).toEqual({ label: 'ZzTest', kind: 'url', url: 'http://[HOST]:81/Dashboard', open: 'iframe', enabled: true })
     expect(root.querySelector('.modal')).toBeNull()
     expect(names()).toEqual(['Backrest', 'ZzTest'])
     expect(root.textContent).toContain('Added ZzTest.')
@@ -280,5 +280,115 @@ describe('reorder, enable, delete', () => {
   it('every icon-only control has an accessible name and a 44px floor class', async () => {
     await mount()
     root.querySelectorAll('.btn-icon').forEach((b) => expect(b.getAttribute('aria-label')).toBeTruthy())
+  })
+})
+
+describe('console tabs', () => {
+  const ctab = (o: Partial<Tab> = {}): Tab => tab({ label: 'Claude', kind: 'console', url: '', container: 'claude-code', session: 'claude', ...o })
+  const pick = (id: string, v: string) => act(() => { const el = root.querySelector(id) as HTMLSelectElement; el.value = v; el.dispatchEvent(new Event('change', { bubbles: true })) })
+  const addConsole = async (label: string) => {
+    await click(byText('button', 'Add tab'))
+    await type(root.querySelector('#atb-f-label') as HTMLInputElement, label)
+    await pick('#atb-f-kind', 'console')
+  }
+  beforeEach(() => { stored = [tab(), ctab()] })
+
+  it('the list shows the kind and the command a console tab runs', async () => {
+    await mount()
+    expect(names()).toEqual(['Backrest', 'Claude'])
+    const row = root.querySelectorAll('.atb-row')[1]
+    expect(row.textContent).toContain('Docker console')
+    expect(row.textContent).toContain('docker exec -it claude-code tmux attach -t claude')
+    expect(row.textContent).not.toContain('In a tab')
+    expect(root.querySelectorAll('.atb-row')[0].textContent).toContain('Web app')
+  })
+  it('a tab the server sends the 0.1.x way (no kind, no console keys) is a URL tab', async () => {
+    stored = [{ label: 'Old', url: 'http://[HOST]:9898/', open: 'iframe', enabled: true } as unknown as Tab]
+    await mount()
+    expect(root.textContent).toContain('Web app')
+    await click(byLabel('Edit Old'))
+    expect((root.querySelector('#atb-f-url') as HTMLInputElement).value).toBe('http://[HOST]:9898/')
+    expect((root.querySelector('#atb-f-kind') as HTMLSelectElement).value).toBe('url')
+  })
+  it('the form swaps the URL fields for container/session fields, and a shell only when there is no session', async () => {
+    stored = []
+    await mount()
+    await click(byText('button', 'Add tab'))
+    expect(root.querySelector('#atb-f-url')).toBeTruthy()
+    expect(root.querySelector('#atb-f-container')).toBeNull()
+    await pick('#atb-f-kind', 'console')
+    expect(root.querySelector('#atb-f-url')).toBeNull()
+    expect(root.querySelector('#atb-f-open')).toBeNull()
+    expect(root.querySelector('#atb-f-container')).toBeTruthy()
+    expect(root.querySelector('#atb-f-session')).toBeTruthy()
+    expect(root.querySelector('#atb-f-shell')).toBeTruthy()
+    await type(root.querySelector('#atb-f-session') as HTMLInputElement, 'claude')
+    expect(root.querySelector('#atb-f-shell')).toBeNull()
+    expect(root.querySelector('.modal')!.textContent).toContain('docker exec -it  tmux attach -t claude')
+  })
+  it('hostile container and session names are refused before anything is sent', async () => {
+    stored = []
+    await mount()
+    for (const [c, s] of [['a;b', ''], ['$(x)', ''], ['a b', ''], ['-rf', ''], ['.x', ''], ['ünï', ''], ['x'.repeat(129), ''], ['', ''], ['ok', 'a;b'], ['ok', '-t'], ['ok', 'a b']]) {
+      calls = []
+      await click(byText('button', 'Add tab'))
+      await type(root.querySelector('#atb-f-label') as HTMLInputElement, 'Zz')
+      await pick('#atb-f-kind', 'console')
+      await type(root.querySelector('#atb-f-container') as HTMLInputElement, c)
+      await type(root.querySelector('#atb-f-session') as HTMLInputElement, s)
+      await submitForm()
+      expect(saves(), `container ${JSON.stringify(c)} session ${JSON.stringify(s)}`).toHaveLength(0)
+      expect(root.querySelector('.atb-err'), `error shown for ${JSON.stringify([c, s])}`).toBeTruthy()
+      await click(byText('button', 'Cancel'))
+    }
+  })
+  it('a valid console tab saves only the console keys, trimmed, with an explicit kind', async () => {
+    stored = [tab()]
+    await mount()
+    await addConsole('Claude')
+    await type(root.querySelector('#atb-f-container') as HTMLInputElement, ' claude-code ')
+    await type(root.querySelector('#atb-f-session') as HTMLInputElement, 'claude')
+    await submitForm(); await flush()
+    expect(saves()[0][1]).toEqual({ label: 'Claude', kind: 'console', container: 'claude-code', session: 'claude', shell: 'sh', enabled: true })
+    expect(names()).toEqual(['Backrest', 'Claude'])
+    expect(root.textContent).toContain('docker exec -it claude-code tmux attach -t claude')
+  })
+  it('an empty session saves the chosen shell', async () => {
+    stored = []
+    await mount()
+    await addConsole('Shell')
+    await type(root.querySelector('#atb-f-container') as HTMLInputElement, 'claude-code')
+    await pick('#atb-f-shell', 'bash')
+    await submitForm(); await flush()
+    expect(saves()[0][0]).toEqual({ label: 'Shell', kind: 'console', container: 'claude-code', session: '', shell: 'bash', enabled: true })
+    expect(root.textContent).toContain('docker exec -it claude-code bash')
+  })
+  it('toggling, reordering and editing never strip a console tab\'s container and session', async () => {
+    await mount()
+    const want = { label: 'Claude', kind: 'console', container: 'claude-code', session: 'claude', shell: 'sh' }
+    await click(byLabel('Move Claude up')); await flush()
+    expect(saves()[0][0]).toEqual({ ...want, enabled: true })
+    await click(byLabel('Move Claude down')); await flush()
+    expect(saves()[1][1]).toEqual({ ...want, enabled: true })
+    await act(() => { (root.querySelectorAll('.atb-row')[1].querySelector('input[type=checkbox]') as HTMLInputElement).click() }); await flush()
+    expect(saves()[2][1]).toEqual({ ...want, enabled: false })
+    expect(saves()[2][0]).toEqual({ label: 'Backrest', kind: 'url', url: 'http://[HOST]:9898/', open: 'iframe', enabled: true })
+    await click(byLabel('Edit Claude'))
+    expect((root.querySelector('#atb-f-container') as HTMLInputElement).value).toBe('claude-code')
+    expect((root.querySelector('#atb-f-session') as HTMLInputElement).value).toBe('claude')
+    await type(root.querySelector('#atb-f-session') as HTMLInputElement, 'other')
+    await submitForm(); await flush()
+    expect(saves()[3][1]).toMatchObject({ container: 'claude-code', session: 'other' })
+  })
+  it('a URL tab is not sent console keys, and the https/http warning never shows for a console tab', async () => {
+    await mount()
+    await click(byLabel('Move Backrest down')); await flush()
+    expect(Object.keys(saves()[0][1])).toEqual(['label', 'kind', 'url', 'open', 'enabled'])
+    expect(root.querySelectorAll('.atb-row')[0].textContent).not.toContain('Blocked')
+  })
+  it('the form states what the tab can do', async () => {
+    await mount()
+    await click(byLabel('Edit Claude'))
+    expect(root.querySelector('.modal')!.textContent).toContain('writable terminal')
   })
 })

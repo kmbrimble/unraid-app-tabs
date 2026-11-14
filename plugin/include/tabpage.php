@@ -35,6 +35,10 @@ function apptabs_render_tab(string $slug): void
         echo '<p>This tab is no longer configured. Open Settings, Utilities, App Tabs to change it.</p>' . "\n";
         return;
     }
+    if ($tab['kind'] === 'console') {
+        apptabs_render_console($slug, $tab);
+        return;
+    }
     $label = apptabs_h($tab['label']);
     $url = apptabs_h($tab['url']);
     $core = '/plugins/app.tabs/app-tabs-core.js';
@@ -97,5 +101,65 @@ function apptabs_render_tab(string $slug): void
   setTimeout(fit, 400);
 })();
 </script>
+<?php
+}
+
+/**
+ * A Docker console tab. Only runs because an authenticated GUI request loaded this page (never at install or boot).
+ * apptabs_console_prepare() verifies the container and tmux session and makes sure the host's ttyd is serving this
+ * tab's socket; the iframe then points at nginx's /logterminal/ proxy for it (same origin, behind the GUI login).
+ * Every failure is a message on the page, never a blank frame.
+ */
+function apptabs_render_console(string $slug, array $tab): void
+{
+    $label = apptabs_h($tab['label']);
+    try {
+        [$ok, $msg, $src] = apptabs_console_prepare($slug, $tab);
+    } catch (\Throwable $e) {
+        error_log('app.tabs console: ' . get_class($e) . ': ' . $e->getMessage());
+        [$ok, $msg, $src] = [false, 'The console could not be prepared (' . get_class($e) . '). See the system log.', ''];
+    }
+    ?>
+<style>
+  #atb-bar { display: flex; justify-content: flex-end; gap: 12px; margin: 0 0 6px; }
+  #atb-frame { display: block; width: 100%; height: 70vh; border: 0; background: transparent; }
+  #atb-problem { margin: 12px 0; padding: 12px 16px; border: 1px solid currentColor; border-radius: 6px; max-width: 48rem; }
+</style>
+<div id="atb-host" data-kind="console" data-label="<?= $label ?>">
+<?php if (!$ok) { ?>
+  <div id="atb-problem" role="alert">
+    <strong>The <?= $label ?> console is not available.</strong>
+    <p><?= apptabs_h($msg) ?></p>
+    <p><a class="button" href="">Try again</a></p>
+  </div>
+<?php } else { ?>
+  <div id="atb-bar"><a id="atb-reconnect" href="#">Reconnect</a><a id="atb-open" href="<?= apptabs_h($src) ?>" target="_blank" rel="noopener">Open full page</a></div>
+  <iframe id="atb-frame" title="<?= $label ?> console" src="<?= apptabs_h($src) ?>"></iframe>
+<?php } ?>
+</div>
+<?php if ($ok) { ?>
+<script>
+(function () {
+  'use strict';
+  var frame = document.getElementById('atb-frame');
+  // Fill the viewport below the Unraid header (the same fit as the URL tabs).
+  function fit() {
+    var footer = document.getElementById('footer');
+    var below = footer && getComputedStyle(footer).position === 'fixed' ? footer.offsetHeight : 0;
+    var h = window.innerHeight - frame.getBoundingClientRect().top - below - 8;
+    frame.style.height = Math.max(320, h) + 'px';
+    var over = document.documentElement.scrollHeight - window.innerHeight;
+    if (over > 0) frame.style.height = Math.max(320, frame.offsetHeight - over) + 'px';
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('load', fit);
+  fit();
+  setTimeout(fit, 400);
+  // Same origin, so the terminal can be given keyboard focus as soon as it has loaded.
+  frame.addEventListener('load', function () { try { frame.contentWindow.focus(); } catch (e) { /* not reachable: leave focus alone */ } });
+  document.getElementById('atb-reconnect').addEventListener('click', function (e) { e.preventDefault(); location.reload(); });  // a page load re-runs the checks and restarts a dead ttyd
+})();
+</script>
+<?php } ?>
 <?php
 }

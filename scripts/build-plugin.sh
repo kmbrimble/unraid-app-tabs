@@ -31,9 +31,11 @@ php "$REPO_ROOT/scripts/check-plg.php" "$REPO_ROOT/$NAME.plg" || { echo "build a
 
 echo "Building $NAME-$VERSION.txz ..."
 
-mkdir -p "$PKG_DIR/include" "$PKG_DIR/app"
+mkdir -p "$PKG_DIR/include" "$PKG_DIR/app" "$PKG_DIR/scripts"
 
 cp "$REPO_ROOT"/plugin/include/*.php "$PKG_DIR/include/"
+# The console tab's per-connection wrapper, run by ttyd (executed through bash, but keep its mode anyway).
+cp "$REPO_ROOT"/plugin/scripts/console-attach.sh "$PKG_DIR/scripts/"
 
 # The web app (ui/, Preact + Vite + TypeScript): app/index.php is the PHP shell, app/assets/ the built JS and CSS. The
 # build is reproducible (fixed output names, no sourcemaps, lockfile-pinned, Node pinned in CI) so the archive md5

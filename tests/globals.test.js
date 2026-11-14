@@ -102,5 +102,96 @@ t('core exposes only window.appTabs in a browser-like scope', () => {
   assert.deepStrictEqual(Object.keys(sb.self), ['appTabs']);
 });
 
+// ---- console tabs: real PHP render against the stand-in docker / ttyd-exec (tests/stubs), then the page script in a vm ----
+const stubDir = path.join(dir, 'stub'); const socks = path.join(dir, 'socks');
+fs.mkdirSync(stubDir); fs.mkdirSync(socks);
+const stubs = path.join(__dirname, 'stubs');
+const stubEnv = () => ({ PATH: process.env.PATH, APPTABS_CONFIG_DIR: dir + '/cfg', APPTABS_PAGES_DIR: dir + '/pages', APPTABS_STUB_DIR: stubDir, APPTABS_DOCKER: stubs + '/docker', APPTABS_TTYD_EXEC: stubs + '/ttyd-exec', APPTABS_SOCK_DIR: socks });
+function renderConsole(tab, slug, env) {
+  fs.writeFileSync(dir + '/cfg/tabs.json', JSON.stringify({ version: 2, tabs: [tab] }));
+  return execFileSync('php', [path.join(__dirname, 'render-tab.php'), slug], { env: Object.assign(stubEnv(), env || {}) }).toString();
+}
+function reap() { execFileSync('php', [path.join(__dirname, '..', 'plugin', 'include', 'console-stop.php')], { env: stubEnv() }); }
+function consoleEl(attrs) {
+  const e = el(attrs); e.listeners = {};
+  e.addEventListener = (ev, fn) => { e.listeners[ev] = fn; };
+  e.contentWindow = { focused: 0, focus() { this.focused++; } };
+  return e;
+}
+function runConsole(html) {
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.strictEqual(scripts.length, 1, 'exactly one inline script');
+  const frame = consoleEl({ src: (html.match(/<iframe[^>]* src="([^"]*)"/) || [])[1] });
+  const reconnect = consoleEl(); const footer = null; let winL = {};
+  const sandbox = {
+    window: { innerHeight: 900, addEventListener(ev, fn) { winL[ev] = fn; } },
+    document: { getElementById: (id) => ({ 'atb-frame': frame, 'atb-reconnect': reconnect }[id] || footer), documentElement: { scrollHeight: 800 } },
+    getComputedStyle: () => ({ position: 'static' }), setTimeout: () => 0,
+    location: { reload() { reloaded++; } },
+  };
+  let reloaded = 0;
+  vm.createContext(sandbox);
+  const before = new Set(Object.getOwnPropertyNames(sandbox));
+  vm.runInContext(scripts[0], sandbox);
+  return { reloads: () => reloaded, frame, reconnect, winL, leaked: Object.getOwnPropertyNames(sandbox).filter((k) => !before.has(k)) };
+}
+const ctabPage = { label: 'Claude', kind: 'console', container: 'claude-code', session: 'claude', shell: 'sh', enabled: true };
+fs.writeFileSync(stubDir + '/ps.txt', 'claude-code|running\nstopped-one|exited\n');
+fs.writeFileSync(stubDir + '/sessions.txt', 'claude\n');
+t('console tab: the iframe points at the relative /logterminal/ socket URL of this tab, server-side, with no URL-tab machinery', () => {
+  const html = renderConsole(ctabPage, 'Claude');
+  assert.ok(html.includes('<iframe id="atb-frame" title="Claude console" src="/logterminal/_apptabs-Claude/"></iframe>'), html);
+  assert.ok(!html.includes('data-url') && !html.includes('atb-mixed') && !html.includes('app-tabs-core.js'));
+  assert.ok(html.includes('href="/logterminal/_apptabs-Claude/" target="_blank"'));
+});
+t('console tab: the page names no container or session (only the whitelisted label reaches HTML)', () => {
+  const html = renderConsole(ctabPage, 'Claude');
+  assert.ok(!html.includes('claude-code') && !/tmux/.test(html));
+});
+t('console tab: the page script focuses the terminal on load, refits on resize, and Reconnect reloads the page; no leaks', () => {
+  const r = runConsole(renderConsole(ctabPage, 'Claude'));
+  assert.deepStrictEqual(r.leaked, []);
+  assert.ok(r.winL.resize && r.winL.load);
+  r.frame.listeners.load();
+  assert.strictEqual(r.frame.contentWindow.focused, 1);
+  let prevented = 0;
+  r.reconnect.listeners.click({ preventDefault() { prevented++; } });
+  assert.strictEqual(prevented, 1); assert.strictEqual(r.reloads(), 1, 'Reconnect reloads the page, so the container/ttyd checks run again');
+  assert.ok(parseInt(r.frame.style.height, 10) >= 320);
+});
+t('console tab: a cross-origin or failing contentWindow.focus() does not throw', () => {
+  const r = runConsole(renderConsole(ctabPage, 'Claude'));
+  r.frame.contentWindow.focus = () => { throw new Error('denied'); };
+  r.frame.listeners.load();
+});
+for (const [why, tabv, needle] of [
+  ['missing container', { ...ctabPage, container: 'ghost-box' }, 'There is no Docker container named ghost-box'],
+  ['stopped container', { ...ctabPage, container: 'stopped-one' }, 'is not running'],
+  ['missing tmux session', { ...ctabPage, session: 'nosuch' }, 'no tmux session named nosuch'],
+]) {
+  t('console tab: ' + why + ' shows a message, not an iframe or script', () => {
+    const html = renderConsole(tabv, 'Claude');
+    assert.ok(html.includes('role="alert"') && html.includes(needle), html);
+    assert.ok(!html.includes('<iframe') && !html.includes('<script'));
+    assert.ok(html.includes('Try again'));
+  });
+}
+t('console tab: docker missing and hung-ttyd messages are shown', () => {
+  assert.ok(renderConsole(ctabPage, 'Claude', { APPTABS_DOCKER: dir + '/nope' }).includes('docker command was not found'));
+  assert.ok(renderConsole(ctabPage, 'Claude', { APPTABS_TTYD_EXEC: dir + '/nope' }).includes('ttyd-exec'));
+});
+t('console tab: messages are HTML-escaped (a hostile Docker error cannot inject markup)', () => {
+  fs.writeFileSync(dir + '/evil-docker', '#!/bin/bash\necho "<script>alert(1)</script>" >&2\nexit 1\n', { mode: 0o755 });
+  const html = renderConsole(ctabPage, 'Claude', { APPTABS_DOCKER: dir + '/evil-docker' });
+  assert.ok(html.includes('role="alert"') && !html.includes('<script>alert(1)'), html);
+});
+t('console tab: a disabled tab renders the not-configured message and calls nothing', () => {
+  const lines = () => (fs.existsSync(stubDir + '/docker.log') ? fs.readFileSync(stubDir + '/docker.log', 'utf8').split('\n').length : 0);
+  const before = lines();
+  const html = renderConsole({ ...ctabPage, enabled: false }, 'Claude');
+  assert.ok(html.includes('no longer configured') && !html.includes('<iframe'));
+  assert.strictEqual(lines(), before, 'a disabled tab must not call docker');
+});
+reap();
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(n + ' global-scope / page-script checks passed' + (process.exitCode ? ' (with failures above)' : ''));

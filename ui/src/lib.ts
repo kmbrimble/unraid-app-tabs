@@ -1,8 +1,20 @@
 export class ApiError extends Error {}
 
 export type OpenIn = 'iframe' | 'newtab'
-export interface Tab { label: string; url: string; open: OpenIn; enabled: boolean }
+export type Kind = 'url' | 'console'
+export type Shell = 'sh' | 'bash'
+/**
+ * One flat shape for the editor: a URL tab uses url/open, a console tab uses container/session/shell. The server sends only
+ * the keys of a tab's own kind (and no kind at all for tabs written by 0.1.x), so fromServer() fills the rest with defaults.
+ */
+export interface Tab { label: string; kind: Kind; url: string; open: OpenIn; container: string; session: string; shell: Shell; enabled: boolean }
 export interface FieldError { index: number; field: string; message: string }
+
+export const blankTab = (kind: Kind = 'url'): Tab =>
+  ({ label: '', kind, url: 'http://[HOST]:', open: 'iframe', container: '', session: '', shell: 'sh', enabled: true })
+export function fromServer(t: Partial<Tab>): Tab {
+  return { ...blankTab(t.kind === 'console' ? 'console' : 'url'), ...t, url: t.url ?? '', kind: t.kind === 'console' ? 'console' : 'url' }
+}
 export interface GetResponse {
   ok: boolean
   tabs: Tab[]
@@ -16,7 +28,10 @@ export interface GetResponse {
 /** The shared label/URL rules (plugin/app-tabs-core.js, loaded by app/index.php); the PHP twin enforces them again on save. */
 export interface Core {
   MAX_TABS: number
+  IDENT_MAX: number
   validateLabel(label: string): string | null
+  validateContainer(v: string): string | null
+  validateSession(v: string): string | null
   slugOf(label: string): string
   validateUrl(url: string): string | null
   resolveUrl(url: string, hostname: string): string
@@ -81,16 +96,29 @@ export function moveTab(list: Tab[], i: number, dir: -1 | 1): Tab[] {
 
 /** The payload for `save`: the whole list, trimmed, in order. */
 export function savePayload(list: Tab[]): string {
-  return JSON.stringify(list.map((t) => ({ label: t.label.trim(), url: t.url.trim(), open: t.open, enabled: t.enabled })))
+  return JSON.stringify(list.map((t) => t.kind === 'console'
+    ? { label: t.label.trim(), kind: 'console', container: t.container.trim(), session: t.session.trim(), shell: t.shell, enabled: t.enabled }
+    : { label: t.label.trim(), kind: 'url', url: t.url.trim(), open: t.open, enabled: t.enabled }))
 }
 
+/** What the list shows after a successful save: the same trimming savePayload applied. */
+export const trimTab = (t: Tab): Tab => ({ ...t, label: t.label.trim(), url: t.url.trim(), container: t.container.trim(), session: t.session.trim() })
+
 /** Field-level validation for the add/edit form. `others` is the rest of the list (for the duplicate check). */
-export function validateTab(t: Tab, others: Tab[], c: Core = core()): { label?: string; url?: string } {
-  const out: { label?: string; url?: string } = {}
+export interface TabErrors { label?: string; url?: string; container?: string; session?: string }
+export function validateTab(t: Tab, others: Tab[], c: Core = core()): TabErrors {
+  const out: TabErrors = {}
   const label = t.label.trim()
   const le = c.validateLabel(label)
   if (le) out.label = le
   else if (others.some((o) => c.slugOf(o.label).toLowerCase() === c.slugOf(label).toLowerCase())) out.label = 'Another tab already uses that label.'
+  if (t.kind === 'console') {
+    const ce = c.validateContainer(t.container.trim())
+    if (ce) out.container = ce
+    const se = c.validateSession(t.session.trim())
+    if (se) out.session = se
+    return out
+  }
   const ue = c.validateUrl(t.url.trim())
   if (ue) out.url = ue
   return out
@@ -118,3 +146,7 @@ export function saveThemePref(pref: ThemePref, storage?: Pick<Storage, 'setItem'
 export function applyTheme(pref: ThemePref, root: HTMLElement = document.documentElement): void {
   root.setAttribute('data-theme', pref === 'auto' ? (root.dataset.serverTheme === 'dark' ? 'dark' : 'light') : pref)
 }
+
+/** The command a console tab runs, as shown in the list and the form (display only; the server builds the real argv). */
+export const consoleSummary = (t: Pick<Tab, 'container' | 'session' | 'shell'>): string =>
+  t.session.trim() !== '' ? `docker exec -it ${t.container.trim()} tmux attach -t ${t.session.trim()}` : `docker exec -it ${t.container.trim()} ${t.shell}`

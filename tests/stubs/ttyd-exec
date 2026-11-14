@@ -1,0 +1,5 @@
+#!/bin/bash
+# Test stand-in for Unraid's /usr/local/sbin/ttyd-exec: backgrounds the fake ttyd next to it, like the real wrapper does.
+here="$(cd "$(dirname "$0")" && pwd)"
+echo "$*" >> "$APPTABS_STUB_DIR/ttyd-exec.log"
+php "$here/ttyd" "$@" </dev/null >/dev/null 2>&1 &

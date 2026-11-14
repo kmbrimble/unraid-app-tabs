@@ -20,6 +20,25 @@
   // Anything that could break out of an attribute, a header or a shell-ish context, or that has no business in a URL.
   var URL_FORBIDDEN = /[^\x21-\x7e]|["'`<>\\^{}|]/;
 
+  // A Docker container or tmux session name: Unraid's own terminal launcher rule (OpenTerminal.php terminal_identifier)
+  // plus a length cap. First character alphanumeric: never an option (no leading dash) or a hidden path (no leading dot).
+  var IDENT_MAX = 128;
+  var IDENT_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+  var SHELLS = ['sh', 'bash'];
+  var IDENT_MSG = 'Use letters, digits and . _ - only, starting with a letter or digit (up to ' + IDENT_MAX + ' characters)';
+
+  function isIdentifier(v) { return typeof v === 'string' && v.length <= IDENT_MAX && IDENT_RE.test(v); }
+  function validateContainer(v) {
+    if (typeof v !== 'string' || v === '') return 'Enter the container name.';
+    return isIdentifier(v) ? null : IDENT_MSG + '.';
+  }
+  /** Optional: empty means "open a shell instead". */
+  function validateSession(v) {
+    if (v === '') return null;
+    return isIdentifier(v) ? null : IDENT_MSG + ', or leave it empty for a shell.';
+  }
+  function validateShell(v) { return SHELLS.indexOf(v) !== -1 ? null : 'Choose sh or bash.'; }
+
   function validateLabel(label) {
     if (typeof label !== 'string' || label === '') return 'Enter a label.';
     if (label.length > 24) return 'Use 24 characters or fewer.';
@@ -75,13 +94,24 @@
         if (k in seen) errors.push({ index: i, field: 'label', message: 'Another tab already uses that label.' });
         seen[k] = i;
       }
+      if (!t || typeof t.enabled !== 'boolean') errors.push({ index: i, field: 'enabled', message: 'Enabled must be true or false.' });
+      var kind = t && t.kind != null ? t.kind : 'url'; // null/absent = URL tab, as in PHP's ??
+      if (kind === 'console') {
+        e = validateContainer(t.container);
+        if (e) errors.push({ index: i, field: 'container', message: e });
+        e = validateSession(t.session == null ? '' : t.session);
+        if (e) errors.push({ index: i, field: 'session', message: e });
+        e = validateShell(t.shell == null ? 'sh' : t.shell);
+        if (e) errors.push({ index: i, field: 'shell', message: e });
+        return;
+      }
+      if (kind !== 'url') errors.push({ index: i, field: 'kind', message: 'Choose a URL or a Docker console.' });
       e = validateUrl(t && t.url);
       if (e) errors.push({ index: i, field: 'url', message: e });
       if (!t || (t.open !== 'iframe' && t.open !== 'newtab')) errors.push({ index: i, field: 'open', message: 'Choose how to open the app.' });
-      if (!t || typeof t.enabled !== 'boolean') errors.push({ index: i, field: 'enabled', message: 'Enabled must be true or false.' });
     });
     return errors;
   }
 
-  return { MAX_TABS: MAX_TABS, validateLabel: validateLabel, slugOf: slugOf, validateUrl: validateUrl, resolveUrl: resolveUrl, isMixedContent: isMixedContent, validateTabs: validateTabs };
+  return { MAX_TABS: MAX_TABS, IDENT_MAX: IDENT_MAX, validateContainer: validateContainer, validateSession: validateSession, validateShell: validateShell, validateLabel: validateLabel, slugOf: slugOf, validateUrl: validateUrl, resolveUrl: resolveUrl, isMixedContent: isMixedContent, validateTabs: validateTabs };
 });

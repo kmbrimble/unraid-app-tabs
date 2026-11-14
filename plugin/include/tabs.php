@@ -20,6 +20,8 @@ const APPTABS_FIRST_RANK = 93;      // Tasks:90 Tools, 91 SecretsMan, 92 NetMan;
 const APPTABS_MARKER = 'app-tabs:generated';
 const APPTABS_MAX_JSON = 65536;
 
+require_once __DIR__ . '/console.php';
+
 function apptabs_env(string $name, string $default): string
 {
     $v = getenv($name);
@@ -92,9 +94,50 @@ function apptabs_validate_url(mixed $url): ?string
     return null;
 }
 
+const APPTABS_IDENT_MAX = 128;
+const APPTABS_SHELLS = ['sh', 'bash'];
+
+/**
+ * A Docker container name or a tmux session name. Same character rule as Unraid's own terminal launcher
+ * (dynamix OpenTerminal.php terminal_identifier), plus a length cap. First character alphanumeric, so it can never be
+ * read as an option (no leading dash) or a hidden/relative path (no leading dot).
+ */
+function apptabs_is_identifier(mixed $v): bool
+{
+    return is_string($v) && strlen($v) <= APPTABS_IDENT_MAX && preg_match('/\A[A-Za-z0-9][A-Za-z0-9_.-]*\z/', $v) === 1;
+}
+
+function apptabs_validate_container(mixed $v): ?string
+{
+    if (!is_string($v) || $v === '') {
+        return 'Enter the container name.';
+    }
+    if (!apptabs_is_identifier($v)) {
+        return 'Use letters, digits and . _ - only, starting with a letter or digit (up to ' . APPTABS_IDENT_MAX . ' characters).';
+    }
+    return null;
+}
+
+/** The tmux session is optional: empty means "open a shell instead". */
+function apptabs_validate_session(mixed $v): ?string
+{
+    if ($v === '') {
+        return null;
+    }
+    if (!apptabs_is_identifier($v)) {
+        return 'Use letters, digits and . _ - only, starting with a letter or digit (up to ' . APPTABS_IDENT_MAX . ' characters), or leave it empty for a shell.';
+    }
+    return null;
+}
+
+function apptabs_validate_shell(mixed $v): ?string
+{
+    return is_string($v) && in_array($v, APPTABS_SHELLS, true) ? null : 'Choose sh or bash.';
+}
+
 /**
  * Validate and normalise a decoded list. Returns [list|null, errors]; errors are {index, field, message}.
- * Only the four known keys survive, in a fixed order.
+ * Only the known keys of each kind survive, in a fixed order. A tab without a kind is a URL tab (every 0.1.x file).
  */
 function apptabs_normalize(mixed $tabs): array
 {
@@ -123,6 +166,25 @@ function apptabs_normalize(mixed $tabs): array
             }
             $seen[$k] = true;
         }
+        if (!is_bool($t['enabled'] ?? null)) {
+            $errors[] = ['index' => $i, 'field' => 'enabled', 'message' => 'Enabled must be true or false.'];
+        }
+        $kind = $t['kind'] ?? 'url';
+        if ($kind === 'console') {
+            $container = $t['container'] ?? null;
+            $session = $t['session'] ?? '';
+            $shell = $t['shell'] ?? 'sh';
+            foreach ([['container', apptabs_validate_container($container)], ['session', apptabs_validate_session($session)], ['shell', apptabs_validate_shell($shell)]] as [$field, $e]) {
+                if ($e !== null) {
+                    $errors[] = ['index' => $i, 'field' => $field, 'message' => $e];
+                }
+            }
+            $out[] = ['label' => $label, 'kind' => 'console', 'container' => $container, 'session' => $session, 'shell' => $shell, 'enabled' => $t['enabled'] ?? null];
+            continue;
+        }
+        if ($kind !== 'url') {
+            $errors[] = ['index' => $i, 'field' => 'kind', 'message' => 'Choose a URL or a Docker console.'];
+        }
         $err = apptabs_validate_url($t['url'] ?? null);
         if ($err !== null) {
             $errors[] = ['index' => $i, 'field' => 'url', 'message' => $err];
@@ -131,10 +193,7 @@ function apptabs_normalize(mixed $tabs): array
         if ($open !== 'iframe' && $open !== 'newtab') {
             $errors[] = ['index' => $i, 'field' => 'open', 'message' => 'Choose how to open the app.'];
         }
-        if (!is_bool($t['enabled'] ?? null)) {
-            $errors[] = ['index' => $i, 'field' => 'enabled', 'message' => 'Enabled must be true or false.'];
-        }
-        $out[] = ['label' => $label, 'url' => $t['url'] ?? null, 'open' => $open, 'enabled' => $t['enabled'] ?? null];
+        $out[] = ['label' => $label, 'kind' => 'url', 'url' => $t['url'] ?? null, 'open' => $open, 'enabled' => $t['enabled'] ?? null];
     }
     return $errors === [] ? [$out, []] : [null, $errors];
 }
@@ -156,15 +215,50 @@ function apptabs_load(): array
         return $fail('cannot be read');
     }
     $d = json_decode($raw, true);
-    if (!is_array($d) || ($d['version'] ?? null) !== 1 || !array_key_exists('tabs', $d)) {
-        return $fail('not a version 1 App Tabs file');
+    $version = is_array($d) ? ($d['version'] ?? null) : null;
+    if (($version !== 1 && $version !== 2) || !array_key_exists('tabs', $d)) {
+        return $fail('not a version 1 or 2 App Tabs file');
     }
     [$tabs, $errs] = apptabs_normalize($d['tabs']);
+    // Version 1 is what 0.1.x wrote and can only hold URL tabs; a console tab needs version 2 (see apptabs_encode).
+    if ($tabs !== null && $version === 1) {
+        foreach ($tabs as $i => $t) {
+            if ($t['kind'] !== 'url') {
+                $tabs = null;
+                $errs = [['index' => $i, 'field' => 'kind', 'message' => 'a console tab needs a version 2 file']];
+                break;
+            }
+        }
+    }
     if ($tabs === null) {
         $e = $errs[0];
         return $fail('tab ' . ($e['index'] + 1) . ' ' . $e['field'] . ': ' . $e['message']);
     }
     return ['tabs' => $tabs, 'error' => null, 'exists' => true];
+}
+
+/**
+ * The file text for a normalised list. Version choice (deliberate): a list of URL tabs only is written EXACTLY as 0.1.x
+ * wrote it (version 1, four keys, no kind), so installing this version changes nothing on flash and a downgrade to 0.1.x
+ * keeps working. The first console tab switches the file to version 2, where every tab carries an explicit kind. 0.1.x
+ * refuses a version 2 file ("not a version 1 App Tabs file": no tabs generated, nothing overwritten), which is the safe
+ * failure: it can never load a console entry and turn it into a URL tab on its next save.
+ */
+function apptabs_encode(array $list): string
+{
+    $v2 = false;
+    foreach ($list as $t) {
+        $v2 = $v2 || $t['kind'] !== 'url';
+    }
+    $tabs = array_map(function (array $t) use ($v2): array {
+        if ($t['kind'] === 'console') {
+            return ['label' => $t['label'], 'kind' => 'console', 'container' => $t['container'], 'session' => $t['session'], 'shell' => $t['shell'], 'enabled' => $t['enabled']];
+        }
+        return $v2
+            ? ['label' => $t['label'], 'kind' => 'url', 'url' => $t['url'], 'open' => $t['open'], 'enabled' => $t['enabled']]
+            : ['label' => $t['label'], 'url' => $t['url'], 'open' => $t['open'], 'enabled' => $t['enabled']];
+    }, $list);
+    return json_encode(['version' => $v2 ? 2 : 1, 'tabs' => $tabs], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
 }
 
 /** Write via a temp file in the same directory and rename, so a reader never sees a half-written file. */
@@ -241,11 +335,16 @@ function apptabs_save_unlocked(array $tabs): array
             apptabs_atomic_write($path . '.bak', $old);
         }
     }
-    $json = json_encode(['version' => 1, 'tabs' => $list], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+    $json = apptabs_encode($list);
     if (!apptabs_atomic_write($path, $json)) {
         return [false, "Not saved: cannot write $path"];
     }
     [$ok, $msg] = apptabs_generate_unlocked();
+    try {
+        apptabs_console_reap($list);   // stop a console ttyd whose tab was removed, disabled or edited
+    } catch (\Throwable $e) {
+        error_log('app.tabs: console cleanup failed: ' . $e->getMessage());
+    }
     return [$ok, $ok ? 'Saved.' : "Saved to $path, but generating the tab pages failed: $msg"];
 }
 

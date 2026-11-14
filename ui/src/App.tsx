@@ -1,11 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks'
-import { ApiError, core, mixedWarning, moveTab, postJson, savePayload, tabPath, validateTab, type FieldError, type GetResponse, type Tab } from './lib'
+import { ApiError, blankTab, consoleSummary, core, fromServer, mixedWarning, moveTab, postJson, savePayload, tabPath, trimTab, validateTab, type FieldError, type GetResponse, type Kind, type Tab, type TabErrors } from './lib'
 import { Field, Modal, ThemeSwitch, Toasts, Toggle, TrashIcon, type Toast } from './ui'
 
 const API = '../include/api.php'
-const BLANK: Tab = { label: '', url: 'http://[HOST]:', open: 'iframe', enabled: true }
-
-interface Form { index: number | null; tab: Tab; errors: { label?: string; url?: string }; busy: boolean }
+interface Form { index: number | null; tab: Tab; errors: TabErrors; busy: boolean }
 
 export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetch }) {
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -33,7 +31,7 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
     setLoadError(null)
     try {
       const r = await post<GetResponse>('get')
-      setTabs(r.tabs)
+      setTabs(r.tabs.map(fromServer))
       setConfigError(r.config_error)
       setMaxTabs(r.max_tabs)
       setLoaded(true)
@@ -51,7 +49,7 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
     setBusy(true)
     try {
       await post('save', { tabs: savePayload(next) })
-      setTabs(next.map((t) => ({ ...t, label: t.label.trim(), url: t.url.trim() })))
+      setTabs(next.map(trimTab))
       setChanged(true)
       push('ok', okText)
       return { ok: true }
@@ -66,14 +64,14 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
     }
   }, [post, push, load])
 
-  const openAdd = () => setForm({ index: null, tab: { ...BLANK }, errors: {}, busy: false })
+  const openAdd = () => setForm({ index: null, tab: blankTab(), errors: {}, busy: false })
   const openEdit = (i: number) => setForm({ index: i, tab: { ...tabs[i] }, errors: {}, busy: false })
   const others = (index: number | null) => tabs.filter((_, i) => i !== index)
 
   const submit = async () => {
     if (!form) return
     const errors = validateTab(form.tab, others(form.index))
-    if (errors.label || errors.url) { setForm({ ...form, errors }); return }
+    if (Object.keys(errors).length > 0) { setForm({ ...form, errors }); return }
     const next = form.index === null ? [...tabs, form.tab] : tabs.map((t, i) => (i === form.index ? form.tab : t))
     setForm({ ...form, busy: true })
     const r = await save(next, form.index === null ? `Added ${form.tab.label.trim()}.` : `Saved ${form.tab.label.trim()}.`)
@@ -89,7 +87,7 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
   }
 
   const canAdd = loaded && !loadError && !configError && tabs.length < maxTabs
-  const patch = (p: Partial<Tab>) => setForm((f) => (f ? { ...f, tab: { ...f.tab, ...p }, errors: { ...f.errors, ...(p.label !== undefined ? { label: undefined } : {}), ...(p.url !== undefined ? { url: undefined } : {}) } } : f))
+  const patch = (p: Partial<Tab>) => setForm((f) => (f ? { ...f, tab: { ...f.tab, ...p }, errors: { ...f.errors, ...(p.label !== undefined ? { label: undefined } : {}), ...(p.url !== undefined ? { url: undefined } : {}), ...(p.container !== undefined ? { container: undefined } : {}), ...(p.session !== undefined ? { session: undefined } : {}) } } : f))
 
   return (
     <div class="atb-wrap">
@@ -139,12 +137,13 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
                     <span class="atb-pos" aria-hidden="true">{i + 1}</span>
                     <div class="atb-main">
                       <span class="atb-name">{t.label}</span>
-                      <code class="atb-url">{t.url}</code>
+                      <code class="atb-url">{t.kind === 'console' ? consoleSummary(t) : t.url}</code>
                     </div>
                     <div class="atb-chips">
                       <span class={`chip ${t.enabled ? 'chip--ok' : 'chip--warn'}`}>{t.enabled ? 'Enabled' : 'Disabled'}</span>
-                      <span class="chip">{t.open === 'iframe' ? 'In a tab' : 'New browser tab'}</span>
-                      {t.open === 'iframe' && mixedWarning(t.url) && <span class="chip chip--warn" title="Unraid is open over https and this app is http">Blocked: http in https</span>}
+                      <span class="chip">{t.kind === 'console' ? 'Docker console' : 'Web app'}</span>
+                      {t.kind === 'url' && <span class="chip">{t.open === 'iframe' ? 'In a tab' : 'New browser tab'}</span>}
+                      {t.kind === 'url' && t.open === 'iframe' && mixedWarning(t.url) && <span class="chip chip--warn" title="Unraid is open over https and this app is http">Blocked: http in https</span>}
                     </div>
                     <div class="atb-actions-row">
                       <button type="button" class="btn btn--secondary atb-small" disabled={busy || i === 0} aria-label={`Move ${t.label} up`} onClick={() => void save(moveTab(tabs, i, -1), `Moved ${t.label} up.`)}>
@@ -174,20 +173,52 @@ export function App({ csrf, fetchImpl }: { csrf: string; fetchImpl?: typeof fetc
                 onInput={(e) => patch({ label: (e.currentTarget as HTMLInputElement).value })} />
               {form.errors.label && <div class="atb-err" role="alert">{form.errors.label}</div>}
             </Field>
-            <Field label="URL" id="atb-f-url" hint="http or https. [HOST] stands for the hostname you opened Unraid with.">
-              <input id="atb-f-url" class="input" value={form.tab.url} autocomplete="off" spellcheck={false} aria-invalid={!!form.errors.url}
-                onInput={(e) => patch({ url: (e.currentTarget as HTMLInputElement).value })} />
-              {form.errors.url && <div class="atb-err" role="alert">{form.errors.url}</div>}
-              {form.tab.open === 'iframe' && mixedWarning(form.tab.url) && (
-                <div class="atb-warn" role="note"><span class="chip chip--warn">Warning</span> Unraid is open over https and this address is http: the browser will block it inside the tab. You can still save it, or use https for the app.</div>
-              )}
-            </Field>
-            <Field label="Open in" id="atb-f-open">
-              <select id="atb-f-open" class="input" value={form.tab.open} onChange={(e) => patch({ open: (e.currentTarget as HTMLSelectElement).value as Tab['open'] })}>
-                <option value="iframe">A tab in Unraid (iframe)</option>
-                <option value="newtab">A new browser tab</option>
+            <Field label="Kind" id="atb-f-kind">
+              <select id="atb-f-kind" class="input" value={form.tab.kind} onChange={(e) => patch({ kind: (e.currentTarget as HTMLSelectElement).value as Kind })}>
+                <option value="url">A web app (URL)</option>
+                <option value="console">A Docker console</option>
               </select>
             </Field>
+            {form.tab.kind === 'url' ? (
+              <>
+                <Field label="URL" id="atb-f-url" hint="http or https. [HOST] stands for the hostname you opened Unraid with.">
+                  <input id="atb-f-url" class="input" value={form.tab.url} autocomplete="off" spellcheck={false} aria-invalid={!!form.errors.url}
+                    onInput={(e) => patch({ url: (e.currentTarget as HTMLInputElement).value })} />
+                  {form.errors.url && <div class="atb-err" role="alert">{form.errors.url}</div>}
+                  {form.tab.open === 'iframe' && mixedWarning(form.tab.url) && (
+                    <div class="atb-warn" role="note"><span class="chip chip--warn">Warning</span> Unraid is open over https and this address is http: the browser will block it inside the tab. You can still save it, or use https for the app.</div>
+                  )}
+                </Field>
+                <Field label="Open in" id="atb-f-open">
+                  <select id="atb-f-open" class="input" value={form.tab.open} onChange={(e) => patch({ open: (e.currentTarget as HTMLSelectElement).value as Tab['open'] })}>
+                    <option value="iframe">A tab in Unraid (iframe)</option>
+                    <option value="newtab">A new browser tab</option>
+                  </select>
+                </Field>
+              </>
+            ) : (
+              <>
+                <Field label="Container" id="atb-f-container" hint="The Docker container's name, as on the Docker tab. It must be running when the tab is opened.">
+                  <input id="atb-f-container" class="input" value={form.tab.container} maxLength={core().IDENT_MAX} autocomplete="off" spellcheck={false} aria-invalid={!!form.errors.container}
+                    onInput={(e) => patch({ container: (e.currentTarget as HTMLInputElement).value })} />
+                  {form.errors.container && <div class="atb-err" role="alert">{form.errors.container}</div>}
+                </Field>
+                <Field label="tmux session" id="atb-f-session" hint="Optional. Attach to this tmux session in the container. Leave empty to open a shell instead.">
+                  <input id="atb-f-session" class="input" value={form.tab.session} maxLength={core().IDENT_MAX} autocomplete="off" spellcheck={false} aria-invalid={!!form.errors.session}
+                    onInput={(e) => patch({ session: (e.currentTarget as HTMLInputElement).value })} />
+                  {form.errors.session && <div class="atb-err" role="alert">{form.errors.session}</div>}
+                </Field>
+                {form.tab.session.trim() === '' && (
+                  <Field label="Shell" id="atb-f-shell">
+                    <select id="atb-f-shell" class="input" value={form.tab.shell} onChange={(e) => patch({ shell: (e.currentTarget as HTMLSelectElement).value as Tab['shell'] })}>
+                      <option value="sh">sh</option>
+                      <option value="bash">bash</option>
+                    </select>
+                  </Field>
+                )}
+                <p class="atb-note">Runs <code>{consoleSummary(form.tab)}</code> through Unraid's own terminal server, behind your Unraid login. It is a writable terminal inside the container, exactly as privileged as the Docker tab's Console.</p>
+              </>
+            )}
             <Toggle label="Enabled" checked={form.tab.enabled} disabled={form.busy} onChange={(on) => patch({ enabled: on })} />
             {form.tab.label.trim() !== '' && core().validateLabel(form.tab.label.trim()) === null && (
               <p class="atb-note">Address in Unraid: <code>{tabPath(form.tab.label.trim())}</code></p>

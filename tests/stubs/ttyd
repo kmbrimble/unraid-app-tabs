@@ -1,0 +1,21 @@
+<?php
+// Fake ttyd: listens on the unix socket given by `-i <path>` until it is killed. Like the real one it leaves the socket
+// file behind when it is killed (so stale sockets can be tested). FAKE_TTYD_NO_SOCKET=1 never creates the socket.
+$at = array_search('-i', $argv, true);
+if ($at === false || !isset($argv[$at + 1])) {
+    exit(2);
+}
+if (getenv('FAKE_TTYD_NO_SOCKET') === '1') {
+    sleep(60);
+    exit(0);
+}
+$srv = stream_socket_server('unix://' . $argv[$at + 1], $errno, $errstr);
+if ($srv === false) {
+    exit(3);
+}
+while (true) {
+    $c = @stream_socket_accept($srv, 30);
+    if ($c) {
+        fclose($c);
+    }
+}

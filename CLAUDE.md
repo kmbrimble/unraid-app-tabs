@@ -11,8 +11,9 @@ scaffolding; their CLAUDE.md files hold the history of the traps this repo alrea
 
 ## What it is
 
-A general plugin: a list of web apps (label, URL, open-in, enabled, order) becomes Unraid top-bar tabs, each embedding the
-app in an iframe. Settings UI: Settings, Utilities, App Tabs.
+A general plugin: a list of tabs becomes Unraid top-bar tabs. A tab is either a **web app** (label, URL, open-in, enabled: an
+iframe or a landing page) or, since 0.2.0, a **Docker console** (label, container, optional tmux session, shell, enabled: a
+live terminal in an iframe). Settings UI: Settings, Utilities, App Tabs.
 
 ## Generic Unraid rules live in skills
 
@@ -46,7 +47,8 @@ Read `unraid-webgui-plugin-pages`, `unraid-plugin-packaging`, `unraid-live-host-
   embedding by `X-Frame-Options`/CSP cannot be detected; documented, not handled.
 - **Open in "new browser tab":** the tab page is a landing page with an Open link (no auto `window.open`, which a browser blocks,
   and no every-page injector).
-- **Config:** `/boot/config/plugins/app.tabs/tabs.json` `{version:1,tabs:[{label,url,open,enabled}]}`, atomic temp+rename,
+- **Config:** `/boot/config/plugins/app.tabs/tabs.json` `{version:1,tabs:[{label,url,open,enabled}]}` (see "Console tabs" for
+  version 2), atomic temp+rename,
   previous good copy kept as `tabs.json.bak`, validated on every load. A corrupt file is an error everywhere (settings page banner,
   tab page text, install log) and `save` refuses to overwrite it.
 - **Regeneration** happens on save, and from the install `<INLINE>` block (`php include/generate.php`), which is also the boot hook.
@@ -54,6 +56,54 @@ Read `unraid-webgui-plugin-pages`, `unraid-plugin-packaging`, `unraid-live-host-
 - **Endpoint:** `include/api.php`, POST urlencoded only, actions `get` and `save` (whole list), no plugin-side CSRF check (see the
   webgui skill). Env overrides for tests: `APPTABS_CONFIG_DIR`, `APPTABS_PAGES_DIR`, `APPTABS_VAR_INI`, `APPTABS_DYNAMIX_CFG`,
   `APPTABS_UI_DIST`.
+
+## Console tabs (0.2.0)
+
+Decisions, with the evidence they rest on (Unraid 7.3.4, ttyd 7.0.1):
+
+- **No terminal server in the container, no credential anywhere.** A console tab runs the HOST's ttyd (through Unraid's
+  `/usr/local/sbin/ttyd-exec`, which sources `/etc/default/ttyd`) on a root-only unix socket `/var/tmp/_apptabs-<slug>.sock`.
+  nginx's `location ~ /logterminal/(.*)/(.*)$` proxies `/logterminal/<name>/` to `unix:/var/tmp/<name>.sock`, and the http-level
+  `auth_request /auth-request.php` makes that need the webGUI session (proved live: unauthenticated `/`, `/token` and the `ws`
+  upgrade get a 302 to `/login`, a bogus cookie too, while the same requests with a session get 200 / 101). `servers.conf`'s
+  `frame-ancestors 'self'` allows the same-origin iframe. The reason for all this is claude-code-unraid issue #19 / CHANGELOG 0.29
+  (a ttyd inside the container could only take its password on argv).
+- **Socket name `_apptabs-<slug>`.** Every other socket there is named after a Docker container, a disk or a log, and all of those
+  start with `[A-Za-z0-9]` (OpenTerminal.php), so a leading underscore cannot collide with or reach one of them. The slug is the
+  whitelisted tab slug, re-validated by `apptabs_console_sockname()`.
+- **Lifecycle differs from Unraid's launcher on purpose.** Unraid uses `-om1` (one client, exit on disconnect), which makes every
+  reload race a dying process. Here ttyd runs WITHOUT `-o`/`-m`: one per tab, serving every connection, found by exact match
+  (`/proc/<pid>/cmdline`: executable name `ttyd` and `-i <socket>` as an exact argv pair, never `pgrep -f`, which matches the agent's
+  own command line), replaced only when its command no longer equals the tab's, started only by `apptabs_console_prepare()` from a
+  page load, serialised by a per-socket flock, readiness = a real connect (a killed ttyd leaves its socket file behind). Stopped by
+  `apptabs_console_reap()` after a save (tab removed, disabled or edited) and by `include/console-stop.php` from the .plg remove block.
+- **`docker exec -it` orphans its process in the container** when the client goes away: killing the docker CLI with HUP, INT, TERM or
+  KILL all leave the `tmux attach` client running (measured), and tmux sizes a window to its smallest client, so every closed
+  browser tab would leave a ghost that can shrink Kieren's real session. `scripts/console-attach.sh` is therefore what ttyd runs:
+  it tags the connection (`docker exec -e APPTABS_CONN=<uuid>`) and on SIGHUP (ttyd is started with `-s1`, not `-s9`, so the wrapper
+  can run) asks the container to HUP every process whose environment carries that id. Measured live: 5 reloads leave 1 tmux client.
+  Unraid's own Console has the same orphaning for the shells it opens; that is not ours to change.
+- **No shell, ever.** Every command is an argv array (`proc_open` with an array never involves `/bin/sh`); the wrapper gets container,
+  session and shell as separate arguments, re-validates them with the same rule and passes them on separately. A test fails if
+  `console.php` contains `exec(`/`system(`/backticks or a `proc_open` that is not the argv one. `tmux attach-session -t =<name>`:
+  the `=` is an exact match, not a prefix.
+- **Pre-checks give messages, not blank frames:** `docker ps -a` compared by exact name (`--filter name=` is a substring match),
+  then `docker exec <c> tmux has-session -t =<s>`; stopped, missing, no tmux, no session, Docker down (a hung docker is cut off at
+  6 s), no `ttyd-exec`, ttyd not listening in 3 s each have their own text, all HTML-escaped.
+- **Config version (deliberate).** URL-only lists are written exactly as 0.1.x wrote them (version 1, four keys, no `kind`): installing
+  0.2.0 changes nothing on flash and a downgrade keeps working. The first console tab switches the file to version 2 with an explicit
+  `kind` on every tab; going back to URL-only rewrites the exact version 1 file (tested byte for byte). The 0.1.1 loader drops unknown
+  keys but requires `url` and `open`, so it would have turned a version 1 console entry into an error or, worse, a URL tab on its next
+  save; it instead refuses a version 2 file ("not a version 1 App Tabs file", no tabs generated, nothing overwritten). A version 1 file
+  containing a console tab is rejected by this loader too. `tests/fixtures/tabs-0.1.1.php` is a byte copy of the 0.1.1 `tabs.php`
+  (CI checks out shallow, so `git show` is not available) and the tests run the real old loader against new files in a subprocess.
+- **The generated page is unchanged** for a console tab: the same fixed line with only the slug; the kind is looked up at render time.
+- **Security statement (keep it in README):** a console tab is a writable terminal in the container (for claude-code: the Docker socket
+  and git credentials), exactly as privileged as Unraid's webGUI terminal and the Docker tab's Console, protected by the same login
+  only, and same-origin with the GUI.
+- Testing seams: `APPTABS_DOCKER`, `APPTABS_TTYD_EXEC`, `APPTABS_BASH`, `APPTABS_SOCK_DIR`; stand-ins in `tests/stubs/` (a docker that
+  orphans its "container process" like the real one, a ttyd-exec, a fake ttyd that listens on the socket). Never run the console tests
+  or `live-check.js console-*` against the real `claude` session: functional tests use a throwaway tmux session `apptabs-test`.
 
 ## Non-negotiable constraints
 
@@ -70,7 +120,7 @@ No test is allowed to skip silently. `php tests/run.php` (builds the UI once and
 `node tests/js.test.js` (shared vectors), `node tests/globals.test.js` (renders real tab pages through PHP and runs the page
 script in a vm), and in `ui/`: `npm test` (vitest, jsdom), `npm run check:contrast`, `npm run build`.
 CI (Gitea): jobs `php84` (everything) and `php81` (PHP suite), the two required checks on `main`.
-Live checks: `NODE_PATH=/tmp/pwcheck/node_modules node scripts/live-check.js shots|exercise|pages` (headless Chromium against the host,
+Live checks: `NODE_PATH=/tmp/pwcheck/node_modules node scripts/live-check.js shots|exercise|pages|console-setup|console-test|console-clean|console-real` (headless Chromium against the host,
 reusing an active root session; never prints it).
 
 ## Deploy and verify

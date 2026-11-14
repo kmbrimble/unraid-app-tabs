@@ -12,18 +12,34 @@ See README.md and CLAUDE.md for design and the release process.
 <!DOCTYPE PLUGIN [
 <!ENTITY name      "app.tabs">
 <!ENTITY author    "kmbrimble">
-<!ENTITY version   "0.1.1">
+<!ENTITY version   "0.2.0">
 <!ENTITY launch    "Settings/AppTabs">
 <!ENTITY pluginURL "https://git.kiztigs.com/kmbrimble/unraid-app-tabs/raw/branch/main/app.tabs.plg">
 <!ENTITY gitURL    "https://git.kiztigs.com/kmbrimble/unraid-app-tabs/releases/download/v&version;">
 <!ENTITY plgPATH   "/boot/config/plugins/&name;">
 <!ENTITY emhttp    "/usr/local/emhttp/plugins/&name;">
-<!ENTITY md5       "370fdee0886cadd0765200b3b8c7a6d8">
+<!ENTITY md5       "1dbc988704d8b7c36597497ae8b8ebaf">
 ]>
 
 <PLUGIN name="&name;" author="&author;" version="&version;" launch="&launch;" pluginURL="&pluginURL;" support="https://git.kiztigs.com/kmbrimble/unraid-app-tabs" min="7.0" icon="window-restore">
 
 <CHANGES>
+###0.2.0
+- New tab kind: Docker console. A top-bar tab can now show a live terminal for a container (a tmux session, for example
+  `docker exec -it claude-code tmux attach -t claude`, or a plain sh/bash shell) inside the page, instead of the Docker tab's
+  Console popup. Set it up under Settings, Utilities, App Tabs: Kind, A Docker console, then the container name and an
+  optional tmux session.
+- It uses Unraid's own terminal server (ttyd) on a root-only socket, behind your Unraid login, exactly as the Docker tab's
+  Console does: no extra port, password or token, and nothing runs inside the container. It is a writable terminal in the
+  container and is as privileged as Unraid's own terminal. It starts only when the tab's page is opened by a signed-in
+  browser (never at install or boot), shows a clear message if the container is stopped or missing or the tmux session is
+  gone, keeps one terminal server per tab however often you reload, and stops it when the tab is edited, disabled or deleted.
+- Closing the browser tab no longer leaves a stray client behind in the container (a plain `docker exec -it` does; for tmux
+  that would leave ghost clients that can shrink the session): each connection is cleaned up when it ends.
+- Your existing tabs are untouched. A list of web-app tabs is saved exactly as before; the file becomes version 2 only
+  while a console tab exists (version 0.1.x refuses such a file rather than misreading it, so downgrading with a console
+  tab present needs the console tab removed first).
+
 ###0.1.1
 - Delivery moved to Gitea (git.kiztigs.com): the plugin file and its release
   packages now come from the Gitea repository instead of GitHub, so the server
@@ -78,6 +94,10 @@ echo "app.tabs: install complete"
 <INLINE>
 # The installed tree (including the generated tab pages) is removed. The config in &plgPATH; (tabs.json and its
 # .bak) is deliberately KEPT so a reinstall brings the tabs back; delete that directory by hand to wipe it.
+# Stop any console terminal servers the tabs started (they live in RAM under /var/tmp, not in the package).
+if [[ -f &emhttp;/include/console-stop.php ]]; then
+  php &emhttp;/include/console-stop.php || true
+fi
 removepkg &name;-&version;
 rm -rf &emhttp;
 

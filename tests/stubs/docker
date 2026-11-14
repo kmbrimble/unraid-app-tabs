@@ -1,0 +1,25 @@
+#!/bin/bash
+# Test stand-in for the docker CLI. State lives in $APPTABS_STUB_DIR: ps.txt (the `docker ps -a --format` lines) and
+# sessions.txt (one tmux session name per line, for `docker exec <c> tmux has-session -t =<s>`). Every call is logged.
+#
+# `exec -it -e VAR=val <c> <cmd...>` behaves like the real thing in the one way that matters: the "container process" is a
+# separate process (a tagged `sleep`) that keeps running when this "CLI" is killed, and only ends when something kills it.
+# `exec <c> sh -c ...` (the wrapper's cleanup) really runs the script locally, so the tag-matching logic is exercised.
+echo "$*" >> "$APPTABS_STUB_DIR/docker.log"
+case "$1" in
+  ps) cat "$APPTABS_STUB_DIR/ps.txt" ;;
+  exec)
+    if [[ "$2" == -it ]]; then
+      env "$4" "${STUB_ATTACH_BIN:-sleep}" "${STUB_ATTACH_SLEEP:-30}" &
+      echo $! > "$APPTABS_STUB_DIR/attach.pid"
+      wait $!
+      exit "${STUB_ATTACH_RC:-0}"
+    elif [[ "$3" == tmux && "$4" == has-session ]]; then
+      grep -qx -- "${6#=}" "$APPTABS_STUB_DIR/sessions.txt" && exit 0
+      echo "can't find session: ${6#=}" >&2; exit 1
+    elif [[ "$3" == sh ]]; then
+      shift 2; exec "$@"
+    fi
+    echo "unexpected exec: $*" >&2; exit 2 ;;
+  *) echo "unexpected: $*" >&2; exit 2 ;;
+esac

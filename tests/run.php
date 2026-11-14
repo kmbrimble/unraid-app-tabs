@@ -10,6 +10,8 @@ mkdir("$tmp/cfg", 0777, true);
 mkdir("$tmp/pages", 0777, true);
 putenv("APPTABS_CONFIG_DIR=$tmp/cfg");
 putenv("APPTABS_PAGES_DIR=$tmp/pages");
+mkdir("$tmp/socks", 0777, true);
+putenv("APPTABS_SOCK_DIR=$tmp/socks");   // a save reaps console ttyds: keep that inside the temp tree
 register_shutdown_function(function () use ($tmp) {
     exec('rm -rf ' . escapeshellarg($tmp));
 });
@@ -111,7 +113,7 @@ check('save: invalid input refused', !$ok);
 checkEquals('save: invalid input leaves the file untouched', $before, (string) file_get_contents("$tmp/cfg/tabs.json"));
 
 // ---- corrupt config -------------------------------------------------------------------------------------------------
-foreach (['{not json', '[]', '{"version":2,"tabs":[]}', '{"version":1,"tabs":[{"label":"x\"y","url":"http://h/","open":"iframe","enabled":true}]}', '{"version":1,"tabs":"x"}'] as $bad) {
+foreach (['{not json', '[]', '{"version":3,"tabs":[]}', '{"version":1,"tabs":[{"label":"x\"y","url":"http://h/","open":"iframe","enabled":true}]}', '{"version":1,"tabs":"x"}'] as $bad) {
     file_put_contents("$tmp/cfg/tabs.json", $bad);
     $r = apptabs_load();
     check('load: corrupt config is an error, not an empty list: ' . substr($bad, 0, 30), is_string($r['error']) && $r['error'] !== '' && $r['tabs'] === []);
@@ -286,7 +288,7 @@ $html = (string) ob_get_clean();
 check('render: a corrupt config shows the error, not a blank box', str_contains($html, 'tabs.json'));
 
 // ---- no CLI-only constructs in functions with a web caller ------------------------------------------------------------
-foreach (['tabs.php', 'tabpage.php'] as $f) {
+foreach (['tabs.php', 'tabpage.php', 'console.php', 'console-stop.php'] as $f) {
     $src = (string) file_get_contents("$root/plugin/include/$f");
     check("web-safe: $f has no STDOUT/STDERR/\$argv", !preg_match('~\b(STDOUT|STDERR|STDIN)\b|\$argv~', $src));
 }
@@ -355,6 +357,10 @@ proc_close($proc);
 check('shell: csrf token is emitted escaped', str_contains($shell, 'data-csrf="ab&lt;c&gt;') && !str_contains($shell, 'ab<c>'));
 check('shell: black theme is dark', str_contains($shell, 'data-theme="dark"'));
 check('shell: loads core, app.js and app.css', str_contains($shell, 'app-tabs-core.js') && str_contains($shell, 'assets/app.js') && str_contains($shell, 'assets/app.css'));
+
+// ---- console tabs ---------------------------------------------------------------------------------------------------
+require __DIR__ . '/console-tests.php';
+putenv("APPTABS_SOCK_DIR=$tmp/socks");
 
 // ---- the .plg --------------------------------------------------------------------------------------------------------
 $plg = "$root/app.tabs.plg";
@@ -445,11 +451,12 @@ if ($rc !== 0 || !is_file("$root/ui/dist/assets/app.js")) {
     exec('tar -tvJf ' . escapeshellarg("$root/dist/app.tabs-0.1.0.txz"), $list);
     $names = array_map(fn($l) => preg_split('/\s+/', $l, 6)[5] ?? '', $list);
     check('package: every path is under usr/local/emhttp/plugins/app.tabs/', count(array_filter($names, fn($n) => !str_starts_with($n, 'usr/'))) === 0 && $names !== []);
-    foreach (['AppTabs.page', 'README.md', 'app-tabs-core.js', 'app/index.php', 'app/assets/app.js', 'app/assets/app.css', 'include/tabs.php', 'include/api.php', 'include/tabpage.php', 'include/generate.php'] as $f) {
+    foreach (['AppTabs.page', 'README.md', 'app-tabs-core.js', 'app/index.php', 'app/assets/app.js', 'app/assets/app.css', 'include/tabs.php', 'include/console.php', 'include/console-stop.php', 'scripts/console-attach.sh', 'include/api.php', 'include/tabpage.php', 'include/generate.php'] as $f) {
         check("package: contains $f", in_array("usr/local/emhttp/plugins/app.tabs/$f", $names, true));
     }
+    check('package: the console wrapper keeps its executable bit', (bool) preg_grep('~^-rwxr-xr-x .*usr/local/emhttp/plugins/app.tabs/scripts/console-attach.sh$~', $list));
     check('package: AppTabs.page sits in the plugin root (the loader globs non-recursively)', in_array('usr/local/emhttp/plugins/app.tabs/AppTabs.page', $names, true));
-    check('package: no repo-only tooling shipped', count(array_filter($names, fn($n) => preg_match('~tests|scripts|node_modules|\.md5~', $n) && !str_ends_with($n, 'README.md'))) === 0);
+    check('package: no repo-only tooling shipped', count(array_filter($names, fn($n) => preg_match('~tests|scripts|node_modules|\.md5~', $n) && !str_ends_with($n, 'README.md') && $n !== 'usr/local/emhttp/plugins/app.tabs/scripts/console-attach.sh' && $n !== 'usr/local/emhttp/plugins/app.tabs/scripts/')) === 0);
     $readme = (string) file_get_contents("$root/plugin/README.md");
     check('plugin README: stock shape (bold name, no headings)', str_starts_with($readme, '**') && !preg_match('~^#~m', $readme));
     [$rc2, $md5b] = $build('umask 077; TZ=Pacific/Auckland XZ_DEFAULTS=--threads=4');
